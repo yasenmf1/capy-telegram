@@ -166,6 +166,38 @@ async function sendMorningBriefing() {
 // Всеки ден в 8:00 Sofia time
 cron.schedule('0 8 * * *', sendMorningBriefing, { timezone: 'Europe/Sofia' });
 
+// ── Вечерна MOTAMO статистика в 21:00 ──
+async function sendEveningStats() {
+  if (!OWNER_ID) return;
+  const motamoUrl = process.env.MOTAMO_URL;
+  const motamoKey = process.env.MOTAMO_KEY;
+  if (!motamoUrl || !motamoKey) return;
+  try {
+    const res = await fetch(`${motamoUrl}/api/stats?key=${motamoKey}`);
+    const stats = await res.json();
+    const total = stats.total || 0;
+    const lines = [`📊 *MOTAMO — Статистика днес*\n`, `Общо запитвания: *${total}*`];
+    if (stats.categories && Object.keys(stats.categories).length) {
+      lines.push('\n*По категории:*');
+      for (const [cat, cnt] of Object.entries(stats.categories).sort((a,b) => b[1]-a[1])) {
+        lines.push(`• ${cat}: ${cnt}`);
+      }
+    }
+    if (stats.products && Object.keys(stats.products).length) {
+      lines.push('\n*Топ продукти:*');
+      Object.entries(stats.products).sort((a,b) => b[1]-a[1]).slice(0,5).forEach(([p,c]) => {
+        lines.push(`• ${p}: ${c}`);
+      });
+    }
+    await bot.telegram.sendMessage(OWNER_ID, lines.join('\n'), { parse_mode: 'Markdown' });
+  } catch (e) {
+    console.error('Evening stats error:', e.message);
+  }
+}
+
+// Всеки ден в 21:00 Sofia time
+cron.schedule('0 21 * * *', sendEveningStats, { timezone: 'Europe/Sofia' });
+
 bot.launch();
 console.log('✅ Capy Telegram Bot стартиран!');
 
