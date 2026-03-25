@@ -14,13 +14,14 @@ const ai = new OpenAI({
 });
 
 const OWNER_ID = process.env.OWNER_TELEGRAM_ID;
-const ALLOWED_IDS = (process.env.ALLOWED_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+const BOT_PASSWORD = process.env.BOT_PASSWORD || 'YasenMF';
 const conversations = new Map();
+const authenticated = new Set(); // потребители влезли с парола
 
 function isAllowed(id) {
-  if (!OWNER_ID) return true;
+  if (!OWNER_ID && !BOT_PASSWORD) return true;
   if (id === OWNER_ID) return true;
-  if (ALLOWED_IDS.includes(id)) return true;
+  if (authenticated.has(id)) return true;
   return false;
 }
 
@@ -29,13 +30,19 @@ const SYSTEM = `Ти си Capy — личен AI асистент на Ясен 
 Имаш достъп до актуална информация от интернет — използвай я когато е нужно.
 Бъди полезен, кратък и конкретен. Форматирай отговорите с Markdown.`;
 
-// Проверка за достъп
+// Проверка за достъп — парола
 bot.use(async (ctx, next) => {
   const id = ctx.from?.id?.toString();
-  if (!isAllowed(id)) {
-    return ctx.reply(`Нямаш достъп към този бот.\n\nТвоят Telegram ID: \`${id}\`\nПрати го на Ясен за да получиш достъп.`, { parse_mode: 'Markdown' });
+  if (isAllowed(id)) return next();
+
+  // Проверка дали пишат паролата
+  const text = ctx.message?.text?.trim();
+  if (text === BOT_PASSWORD) {
+    authenticated.add(id);
+    return ctx.reply('✅ Добре дошъл! Вече имаш достъп.\n\nНапиши каквото искаш — аз съм Capy, твоят AI асистент.');
   }
-  return next();
+
+  return ctx.reply('🔒 Този бот е защитен с парола.\nВъведи паролата за достъп:');
 });
 
 bot.start(ctx => {
