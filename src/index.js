@@ -115,28 +115,49 @@ bot.on('photo', async (ctx) => {
   await ctx.reply('📸 Получих снимката. Засега не мога да анализирам изображения — изпрати ми текстово описание.');
 });
 
+// ── Времето от OpenWeatherMap ──
+async function getWeather() {
+  const key = process.env.WEATHER_API_KEY;
+  if (!key) return null;
+  try {
+    const [cur, fore] = await Promise.all([
+      fetch(`https://api.openweathermap.org/data/2.5/weather?q=Stara+Zagora,BG&appid=${key}&units=metric&lang=bg`).then(r => r.json()),
+      fetch(`https://api.openweathermap.org/data/2.5/forecast?q=Stara+Zagora,BG&appid=${key}&units=metric&lang=bg&cnt=4`).then(r => r.json())
+    ]);
+    const desc = cur.weather[0]?.description || '';
+    const temp = Math.round(cur.main?.temp);
+    const feels = Math.round(cur.main?.feels_like);
+    const humidity = cur.main?.humidity;
+    const wind = Math.round(cur.wind?.speed);
+    const maxTemp = Math.round(Math.max(...fore.list.map(f => f.main.temp_max)));
+    const minTemp = Math.round(Math.min(...fore.list.map(f => f.main.temp_min)));
+    return `🌡 Сега: *${temp}°C* (усеща се ${feels}°C)\n📊 Ден: ${minTemp}°C — ${maxTemp}°C\n☁️ ${desc}\n💧 Влажност: ${humidity}% | 💨 Вятър: ${wind} м/с`;
+  } catch (e) {
+    return null;
+  }
+}
+
 // ── Сутрешен бюлетин ──
 async function sendMorningBriefing() {
   if (!OWNER_ID) return;
   try {
-    const response = await ai.chat.completions.create({
+    const weather = await getWeather();
+    const newsResponse = await ai.chat.completions.create({
       model: 'perplexity/sonar',
       messages: [
         {
           role: 'user',
-          content: `Направи кратък сутрешен бюлетин за Ясен от Стара Загора, България. Днешна дата: ${new Date().toLocaleDateString('bg-BG')}.
-
-1. 🌤 ВРЕМЕТО В СТАРА ЗАГОРА ДНЕС: потърси текущата прогноза — конкретна температура сутринта и следобед, усеща се като, валежи да/не, вятър. Бъди конкретен с градуси.
-2. 📰 ТОП 3 НОВИНИ от България днес
-3. 💪 Един кратък мотивиращ цитат
-
-Форматирай с емоджи, кратко. На български.`
+          content: `Дай топ 3 новини от България днес (${new Date().toLocaleDateString('bg-BG')}) и един мотивиращ цитат. Само новини и цитат — без времето. Кратко, с емоджи, на български.`
         }
       ],
-      max_tokens: 800,
+      max_tokens: 500,
     });
-    const text = response.choices[0].message.content;
-    await bot.telegram.sendMessage(OWNER_ID, `☀️ *Добро утро, Ясен!*\n\n${text}`, { parse_mode: 'Markdown' });
+    const news = newsResponse.choices[0].message.content;
+    const weatherSection = weather
+      ? `🌤 *Времето в Стара Загора:*\n${weather}\n\n`
+      : '';
+    const msg = `☀️ *Добро утро, Ясен!*\n\n${weatherSection}${news}`;
+    await bot.telegram.sendMessage(OWNER_ID, msg, { parse_mode: 'Markdown' });
   } catch (e) {
     console.error('Morning briefing error:', e.message);
   }
