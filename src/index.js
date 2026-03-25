@@ -14,7 +14,15 @@ const ai = new OpenAI({
 });
 
 const OWNER_ID = process.env.OWNER_TELEGRAM_ID;
+const ALLOWED_IDS = (process.env.ALLOWED_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
 const conversations = new Map();
+
+function isAllowed(id) {
+  if (!OWNER_ID) return true;
+  if (id === OWNER_ID) return true;
+  if (ALLOWED_IDS.includes(id)) return true;
+  return false;
+}
 
 const SYSTEM = `Ти си Capy — личен AI асистент на Ясен Начев от Стара Загора, България.
 Ясен управлява суши бизнес MOTAMO. Говори на български освен ако Ясен не пише на английски.
@@ -24,8 +32,8 @@ const SYSTEM = `Ти си Capy — личен AI асистент на Ясен 
 // Проверка за достъп
 bot.use(async (ctx, next) => {
   const id = ctx.from?.id?.toString();
-  if (OWNER_ID && id !== OWNER_ID) {
-    return ctx.reply('Нямаш достъп.');
+  if (!isAllowed(id)) {
+    return ctx.reply(`Нямаш достъп към този бот.\n\nТвоят Telegram ID: \`${id}\`\nПрати го на Ясен за да получиш достъп.`, { parse_mode: 'Markdown' });
   }
   return next();
 });
