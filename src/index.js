@@ -1,6 +1,7 @@
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const OpenAI = require('openai');
+const cron = require('node-cron');
 
 const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
 
@@ -113,6 +114,35 @@ bot.on('text', async (ctx) => {
 bot.on('photo', async (ctx) => {
   await ctx.reply('📸 Получих снимката. Засега не мога да анализирам изображения — изпрати ми текстово описание.');
 });
+
+// ── Сутрешен бюлетин ──
+async function sendMorningBriefing() {
+  if (!OWNER_ID) return;
+  try {
+    const response = await ai.chat.completions.create({
+      model: 'perplexity/sonar',
+      messages: [
+        {
+          role: 'user',
+          content: `Направи кратък сутрешен бюлетин за Ясен Начев от Стара Загора, България. Включи:
+1. Времето в Стара Загора днес (температура, условия)
+2. Топ 3 новини от България днес
+3. Един мотивиращ цитат за деня
+
+Форматирай с емоджи, кратко и ясно. На български.`
+        }
+      ],
+      max_tokens: 800,
+    });
+    const text = response.choices[0].message.content;
+    await bot.telegram.sendMessage(OWNER_ID, `☀️ *Добро утро, Ясен!*\n\n${text}`, { parse_mode: 'Markdown' });
+  } catch (e) {
+    console.error('Morning briefing error:', e.message);
+  }
+}
+
+// Всеки ден в 8:00 Sofia time
+cron.schedule('0 8 * * *', sendMorningBriefing, { timezone: 'Europe/Sofia' });
 
 bot.launch();
 console.log('✅ Capy Telegram Bot стартиран!');
