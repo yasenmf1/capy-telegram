@@ -61,9 +61,23 @@ bot.command('clear', ctx => {
 
 bot.command('help', ctx => {
   ctx.reply(
-    `*Команди:*\n/clear — изчисти историята на разговора\n/help — тази помощ\n\nПросто пиши и аз отговарям!`,
+    `*Команди:*\n/clear — изчисти историята на разговора\n/gmail — резюме на имейлите\n/help — тази помощ\n\nПросто пиши и аз отговарям!`,
     { parse_mode: 'Markdown' }
   );
+});
+
+bot.command('gmail', async ctx => {
+  await ctx.sendChatAction('typing');
+  const summary = await getGmailSummary();
+  if (summary) {
+    try {
+      await ctx.reply(summary, { parse_mode: 'Markdown' });
+    } catch {
+      await ctx.reply(summary);
+    }
+  } else {
+    await ctx.reply('⚠️ Gmail не е конфигуриран или няма имейли.');
+  }
 });
 
 bot.on('text', async (ctx) => {
@@ -115,6 +129,63 @@ bot.on('photo', async (ctx) => {
   await ctx.reply('📸 Получих снимката. Засега не мога да анализирам изображения — изпрати ми текстово описание.');
 });
 
+// ── Gmail ──
+async function getGmailAccessToken() {
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: process.env.GMAIL_CLIENT_ID,
+      client_secret: process.env.GMAIL_CLIENT_SECRET,
+      refresh_token: process.env.GMAIL_REFRESH_TOKEN,
+      grant_type: 'refresh_token'
+    })
+  });
+  const data = await res.json();
+  return data.access_token;
+}
+
+async function getGmailSummary() {
+  if (!process.env.GMAIL_CLIENT_ID) return null;
+  try {
+    const token = await getGmailAccessToken();
+    const since = Math.floor((Date.now() - 24 * 3600 * 1000) / 1000);
+    const listRes = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:inbox after:${since}&maxResults=20`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const listData = await listRes.json();
+    const messages = listData.messages || [];
+    if (messages.length === 0) return '📭 Няма нови имейли за последните 24 часа.';
+
+    const emails = [];
+    for (const m of messages.slice(0, 10)) {
+      const msgRes = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const msg = await msgRes.json();
+      const headers = msg.payload?.headers || [];
+      const from = headers.find(h => h.name === 'From')?.value || 'Неизвестен';
+      const subject = headers.find(h => h.name === 'Subject')?.value || '(без тема)';
+      emails.push(`От: ${from}\nТема: ${subject}`);
+    }
+
+    const aiRes = await ai.chat.completions.create({
+      model: 'google/gemini-flash-1.5',
+      messages: [{
+        role: 'user',
+        content: `Резюмирай тези ${emails.length} имейла кратко на български. Групирай по важност. Маркирай тези изискващи действие с ⚡.\n\n${emails.join('\n---\n')}`
+      }],
+      max_tokens: 600,
+    });
+    return `📧 *Имейли — последните 24 часа (${emails.length}):*\n\n${aiRes.choices[0].message.content}`;
+  } catch (e) {
+    console.error('Gmail error:', e.message);
+    return null;
+  }
+}
+
 // ── Времето от OpenWeatherMap ──
 async function getWeather() {
   const key = process.env.WEATHER_API_KEY;
@@ -153,10 +224,12 @@ async function sendMorningBriefing() {
       max_tokens: 500,
     });
     const news = newsResponse.choices[0].message.content;
+    const gmail = await getGmailSummary();
     const weatherSection = weather
       ? `🌤 *Времето в Стара Загора:*\n${weather}\n\n`
       : '';
-    const msg = `☀️ *Добро утро, Ясен!*\n\n${weatherSection}${news}`;
+    const gmailSection = gmail ? `\n\n${gmail}` : '';
+    const msg = `☀️ *Добро утро, Ясен!*\n\n${weatherSection}${news}${gmailSection}`;
     await bot.telegram.sendMessage(OWNER_ID, msg, { parse_mode: 'Markdown' });
   } catch (e) {
     console.error('Morning briefing error:', e.message);
