@@ -14,7 +14,6 @@ const ai = new OpenAI({
   }
 });
 
-// ПОПРАВКА 1: .trim() премахва случайни интервали/нов ред от .env файла
 const OWNER_ID = process.env.OWNER_TELEGRAM_ID?.trim();
 const BOT_PASSWORD = process.env.BOT_PASSWORD || 'YasenMF';
 const conversations = new Map();
@@ -24,7 +23,6 @@ const MODEL_CHAT   = 'anthropic/claude-sonnet-4-5';
 const MODEL_SEARCH = 'perplexity/sonar';
 const MODEL_FAST   = 'google/gemini-flash-1.5';
 
-// ПОПРАВКА 2: При грешка Ясен получава съобщение в Telegram
 async function notifyOwnerError(where, err) {
   if (!OWNER_ID) return;
   try {
@@ -49,7 +47,6 @@ const SYSTEM = `Ти си Capy — личен AI асистент на Ясен 
 Когато не знаеш нещо или ти трябва актуална информация — кажи го честно.
 Имаш достъп до история на разговора — използвай я за контекст.`;
 
-// ── Middleware: проверка за достъп ──
 bot.use(async (ctx, next) => {
   const id = ctx.from?.id?.toString();
   if (isAllowed(id)) return next();
@@ -61,7 +58,6 @@ bot.use(async (ctx, next) => {
   return ctx.reply('🔒 Този бот е защитен с парола.\nВъведи паролата за достъп:');
 });
 
-// ── /start ──
 bot.start(ctx => {
   ctx.reply(
     `👋 Здравей Ясен!\n\nАз съм *Capy* — твоят личен AI асистент, захранван от Claude.\n\nМога да:\n• Отговарям на въпроси и помагам с идеи\n• Помагам с бизнеса ти MOTAMO\n• Изпращам сутрешен бюлетин всеки ден в 8:00\n• Резюмирам имейлите ти с /gmail\n\nТвоят Telegram ID: \`${ctx.from.id}\``,
@@ -69,13 +65,11 @@ bot.start(ctx => {
   );
 });
 
-// ── /clear ──
 bot.command('clear', ctx => {
   conversations.delete(ctx.from.id.toString());
   ctx.reply('✅ Историята е изчистена. Започваме отначало!');
 });
 
-// ── /help ──
 bot.command('help', ctx => {
   ctx.reply(
     `*Команди:*\n\n/clear — изчисти историята на разговора\n/gmail — резюме на имейлите от последните 24ч\n/weather — времето в Стара Загора\n/stats — статистика на MOTAMO\n/morning — изпрати сутрешния бюлетин СЕГА (за тест)\n/help — тази помощ\n\nПросто пиши и аз отговарям!`,
@@ -83,7 +77,6 @@ bot.command('help', ctx => {
   );
 });
 
-// ── /gmail ──
 bot.command('gmail', async ctx => {
   await ctx.sendChatAction('typing');
   const summary = await getGmailSummary();
@@ -95,7 +88,6 @@ bot.command('gmail', async ctx => {
   }
 });
 
-// ── /weather ──
 bot.command('weather', async ctx => {
   await ctx.sendChatAction('typing');
   const weather = await getWeather();
@@ -107,7 +99,6 @@ bot.command('weather', async ctx => {
   }
 });
 
-// ── /stats ──
 bot.command('stats', async ctx => {
   await ctx.sendChatAction('typing');
   const motamoUrl = process.env.MOTAMO_URL;
@@ -138,7 +129,6 @@ bot.command('stats', async ctx => {
   }
 });
 
-// ПОПРАВКА 3: /morning команда — тествай бюлетина по всяко време без да чакаш 8:00
 bot.command('morning', async ctx => {
   const id = ctx.from.id.toString();
   if (id !== OWNER_ID) return ctx.reply('🔒 Само за Ясен.');
@@ -146,7 +136,6 @@ bot.command('morning', async ctx => {
   await sendMorningBriefing();
 });
 
-// ── Основен чат ──
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
   const text = ctx.message.text;
@@ -179,7 +168,6 @@ bot.on('voice', async (ctx) => {
   await ctx.reply('🎤 Засега не поддържам гласови съобщения — напиши ми текстово.');
 });
 
-// ── Gmail ──
 async function getGmailAccessToken() {
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -231,7 +219,6 @@ async function getGmailSummary() {
   }
 }
 
-// ── Времето ──
 async function getWeather() {
   const key = process.env.WEATHER_API_KEY;
   if (!key) return null;
@@ -253,18 +240,13 @@ async function getWeather() {
   }
 }
 
-// ── Сутрешен бюлетин (8:00) ──
 async function sendMorningBriefing() {
-  // ПОПРАВКА 4: Логване — винаги се вижда дали cron изобщо се изпълнява
   console.log(`[${new Date().toISOString()}] ⏰ sendMorningBriefing стартира, OWNER_ID="${OWNER_ID}"`);
-
   if (!OWNER_ID) {
     console.error('❌ OWNER_TELEGRAM_ID не е зададен в .env!');
     return;
   }
-
   try {
-    // ПОПРАВКА 5: Promise.allSettled — ако едно се провали, другите пак се изпращат
     const [weatherResult, gmailResult] = await Promise.allSettled([
       getWeather(),
       getGmailSummary()
@@ -287,36 +269,32 @@ async function sendMorningBriefing() {
     const gmail   = gmailResult.status   === 'fulfilled' ? gmailResult.value   : null;
 
     const weatherSection = weather ? `🌤 *Времето в Стара Загора:*\n${weather}\n\n` : '';
-    const gmailSection   = gmail   ? `\n\n${gmail}` : '';
+    // ПОПРАВКА: Винаги показва секцията за имейли — дори когато няма нови
+    const gmailSection = gmail
+      ? `\n\n${gmail}`
+      : '\n\n📭 *Имейли:* Няма нови съобщения за последните 24 часа.';
 
     const msg = `☀️ *Добро утро, Ясен!*\n\n${weatherSection}${newsText}${gmailSection}`;
     await bot.telegram.sendMessage(OWNER_ID, msg, { parse_mode: 'Markdown' });
     console.log('✅ Сутрешният бюлетин е изпратен успешно.');
   } catch (e) {
     console.error('Morning briefing FATAL error:', e.message);
-    // ПОПРАВКА 6: При фатална грешка — Ясен получава съобщение в Telegram
     await notifyOwnerError('Сутрешен бюлетин', e.message);
   }
 }
 
-// ── Вечерна MOTAMO статистика (21:00) ──
 async function sendEveningStats() {
   console.log(`[${new Date().toISOString()}] ⏰ sendEveningStats стартира, OWNER_ID="${OWNER_ID}"`);
-
   if (!OWNER_ID) {
     console.error('❌ OWNER_TELEGRAM_ID не е зададен в .env!');
     return;
   }
-
   const motamoUrl = process.env.MOTAMO_URL;
   const motamoKey = process.env.MOTAMO_KEY;
-
   if (!motamoUrl || !motamoKey) {
-    // ПОПРАВКА 7: Вместо тихо да спре — Ясен получава известие
     await notifyOwnerError('Вечерна статистика', 'MOTAMO_URL или MOTAMO_KEY не са зададени в .env');
     return;
   }
-
   try {
     const res = await fetch(`${motamoUrl}/api/stats?key=${motamoKey}`);
     const stats = await res.json();
@@ -342,11 +320,9 @@ async function sendEveningStats() {
   }
 }
 
-// ── Cron задачи ──
 cron.schedule('0 8 * * *', sendMorningBriefing, { timezone: 'Europe/Sofia' });
 cron.schedule('0 21 * * *', sendEveningStats,   { timezone: 'Europe/Sofia' });
 
-// ── Стартиране ──
 bot.launch();
 console.log('✅ Capy Telegram Bot стартиран!');
 console.log(`   OWNER_ID: ${OWNER_ID || '❌ НЕ Е ЗАДАДЕН — репортите НЯМА да се изпращат!'}`);
