@@ -14,10 +14,27 @@ const ai = new OpenAI({
   }
 });
 
-const OWNER_ID = process.env.OWNER_TELEGRAM_ID;
+// ПОПРАВКА 1: .trim() премахва случайни интервали/нов ред от .env файла
+const OWNER_ID = process.env.OWNER_TELEGRAM_ID?.trim();
 const BOT_PASSWORD = process.env.BOT_PASSWORD || 'YasenMF';
 const conversations = new Map();
-const authenticated = new Set(); // потребители влезли с парола
+const authenticated = new Set();
+
+const MODEL_CHAT   = 'anthropic/claude-sonnet-4-5';
+const MODEL_SEARCH = 'perplexity/sonar';
+const MODEL_FAST   = 'google/gemini-flash-1.5';
+
+// ПОПРАВКА 2: При грешка Ясен получава съобщение в Telegram
+async function notifyOwnerError(where, err) {
+  if (!OWNER_ID) return;
+  try {
+    await bot.telegram.sendMessage(
+      OWNER_ID,
+      `⚠️ *Грешка в Capy [${where}]:*\n\`${String(err).slice(0, 300)}\``,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (_) {}
+}
 
 function isAllowed(id) {
   if (!OWNER_ID && !BOT_PASSWORD) return true;
@@ -28,105 +45,138 @@ function isAllowed(id) {
 
 const SYSTEM = `Ти си Capy — личен AI асистент на Ясен Начев от Стара Загора, България.
 Ясен управлява суши бизнес MOTAMO. Говори на български освен ако Ясен не пише на английски.
-Имаш достъп до актуална информация от интернет — използвай я когато е нужно.
-Бъди полезен, кратък и конкретен. Форматирай отговорите с Markdown.`;
+Бъди полезен, кратък и конкретен. Форматирай отговорите с Markdown.
+Когато не знаеш нещо или ти трябва актуална информация — кажи го честно.
+Имаш достъп до история на разговора — използвай я за контекст.`;
 
-// Проверка за достъп — парола
+// ── Middleware: проверка за достъп ──
 bot.use(async (ctx, next) => {
   const id = ctx.from?.id?.toString();
   if (isAllowed(id)) return next();
-
-  // Проверка дали пишат паролата
   const text = ctx.message?.text?.trim();
   if (text === BOT_PASSWORD) {
     authenticated.add(id);
     return ctx.reply('✅ Добре дошъл! Вече имаш достъп.\n\nНапиши каквото искаш — аз съм Capy, твоят AI асистент.');
   }
-
   return ctx.reply('🔒 Този бот е защитен с парола.\nВъведи паролата за достъп:');
 });
 
+// ── /start ──
 bot.start(ctx => {
-  const id = ctx.from.id;
   ctx.reply(
-    `👋 Здравей Ясен!\n\nАз съм Capy — твоят личен AI асистент.\n\nМога да:\n• Отговарям на въпроси\n• Проверявам актуална информация в интернет\n• Помагам с бизнеса ти\n\nТвоят Telegram ID: \`${id}\`\n_(запази го ако ти трябва)_`,
+    `👋 Здравей Ясен!\n\nАз съм *Capy* — твоят личен AI асистент, захранван от Claude.\n\nМога да:\n• Отговарям на въпроси и помагам с идеи\n• Помагам с бизнеса ти MOTAMO\n• Изпращам сутрешен бюлетин всеки ден в 8:00\n• Резюмирам имейлите ти с /gmail\n\nТвоят Telegram ID: \`${ctx.from.id}\``,
     { parse_mode: 'Markdown' }
   );
 });
 
+// ── /clear ──
 bot.command('clear', ctx => {
   conversations.delete(ctx.from.id.toString());
-  ctx.reply('✅ Историята е изчистена.');
+  ctx.reply('✅ Историята е изчистена. Започваме отначало!');
 });
 
+// ── /help ──
 bot.command('help', ctx => {
   ctx.reply(
-    `*Команди:*\n/clear — изчисти историята на разговора\n/gmail — резюме на имейлите\n/help — тази помощ\n\nПросто пиши и аз отговарям!`,
+    `*Команди:*\n\n/clear — изчисти историята на разговора\n/gmail — резюме на имейлите от последните 24ч\n/weather — времето в Стара Загора\n/stats — статистика на MOTAMO\n/morning — изпрати сутрешния бюлетин СЕГА (за тест)\n/help — тази помощ\n\nПросто пиши и аз отговарям!`,
     { parse_mode: 'Markdown' }
   );
 });
 
+// ── /gmail ──
 bot.command('gmail', async ctx => {
   await ctx.sendChatAction('typing');
   const summary = await getGmailSummary();
   if (summary) {
-    try {
-      await ctx.reply(summary, { parse_mode: 'Markdown' });
-    } catch {
-      await ctx.reply(summary);
-    }
+    try { await ctx.reply(summary, { parse_mode: 'Markdown' }); }
+    catch { await ctx.reply(summary); }
   } else {
     await ctx.reply('⚠️ Gmail не е конфигуриран или няма имейли.');
   }
 });
 
+// ── /weather ──
+bot.command('weather', async ctx => {
+  await ctx.sendChatAction('typing');
+  const weather = await getWeather();
+  if (weather) {
+    try { await ctx.reply(`🌤 *Времето в Стара Загора:*\n\n${weather}`, { parse_mode: 'Markdown' }); }
+    catch { await ctx.reply(weather); }
+  } else {
+    await ctx.reply('⚠️ Не мога да получа информация за времето. Провери WEATHER_API_KEY.');
+  }
+});
+
+// ── /stats ──
+bot.command('stats', async ctx => {
+  await ctx.sendChatAction('typing');
+  const motamoUrl = process.env.MOTAMO_URL;
+  const motamoKey = process.env.MOTAMO_KEY;
+  if (!motamoUrl || !motamoKey) {
+    return ctx.reply('⚠️ MOTAMO не е конфигуриран (MOTAMO_URL / MOTAMO_KEY липсват).');
+  }
+  try {
+    const res = await fetch(`${motamoUrl}/api/stats?key=${motamoKey}`);
+    const stats = await res.json();
+    const lines = [`📊 *MOTAMO — Статистика днес*\n`, `Общо запитвания: *${stats.total || 0}*`];
+    if (stats.categories && Object.keys(stats.categories).length) {
+      lines.push('\n*По категории:*');
+      for (const [cat, cnt] of Object.entries(stats.categories).sort((a, b) => b[1] - a[1])) {
+        lines.push(`• ${cat}: ${cnt}`);
+      }
+    }
+    if (stats.products && Object.keys(stats.products).length) {
+      lines.push('\n*Топ продукти:*');
+      Object.entries(stats.products).sort((a, b) => b[1] - a[1]).slice(0, 5).forEach(([p, c]) => {
+        lines.push(`• ${p}: ${c}`);
+      });
+    }
+    await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+  } catch (e) {
+    console.error('Stats error:', e.message);
+    await ctx.reply('⚠️ Грешка при зареждане на статистиката.');
+  }
+});
+
+// ПОПРАВКА 3: /morning команда — тествай бюлетина по всяко време без да чакаш 8:00
+bot.command('morning', async ctx => {
+  const id = ctx.from.id.toString();
+  if (id !== OWNER_ID) return ctx.reply('🔒 Само за Ясен.');
+  await ctx.reply('⏳ Генерирам сутрешния бюлетин...');
+  await sendMorningBriefing();
+});
+
+// ── Основен чат ──
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
   const text = ctx.message.text;
-
-  if (!conversations.has(userId)) {
-    conversations.set(userId, []);
-  }
-
+  if (!conversations.has(userId)) conversations.set(userId, []);
   const history = conversations.get(userId);
   history.push({ role: 'user', content: text });
-
-  // Пази последните 30 съобщения
-  if (history.length > 30) {
-    history.splice(0, history.length - 30);
-  }
-
+  if (history.length > 40) history.splice(0, history.length - 40);
   try {
     await ctx.sendChatAction('typing');
-
     const response = await ai.chat.completions.create({
-      model: 'perplexity/sonar',
-      messages: [
-        { role: 'system', content: SYSTEM },
-        ...history
-      ],
+      model: MODEL_CHAT,
+      messages: [{ role: 'system', content: SYSTEM }, ...history],
       max_tokens: 2000,
     });
-
     const reply = response.choices[0].message.content;
     history.push({ role: 'assistant', content: reply });
-
-    // Изпрати с Markdown (ако не се парсира, изпрати като обикновен текст)
-    try {
-      await ctx.reply(reply, { parse_mode: 'Markdown' });
-    } catch {
-      await ctx.reply(reply);
-    }
-
+    try { await ctx.reply(reply, { parse_mode: 'Markdown' }); }
+    catch { await ctx.reply(reply); }
   } catch (e) {
     console.error('AI error:', e.message);
     await ctx.reply('⚠️ Грешка при свързване с AI. Опитай пак след малко.');
   }
 });
 
-// Снимки — опиши ги
 bot.on('photo', async (ctx) => {
   await ctx.reply('📸 Получих снимката. Засега не мога да анализирам изображения — изпрати ми текстово описание.');
+});
+
+bot.on('voice', async (ctx) => {
+  await ctx.reply('🎤 Засега не поддържам гласови съобщения — напиши ми текстово.');
 });
 
 // ── Gmail ──
@@ -157,7 +207,6 @@ async function getGmailSummary() {
     const listData = await listRes.json();
     const messages = listData.messages || [];
     if (messages.length === 0) return '📭 Няма нови имейли за последните 24 часа.';
-
     const emails = [];
     for (const m of messages.slice(0, 10)) {
       const msgRes = await fetch(
@@ -170,13 +219,9 @@ async function getGmailSummary() {
       const subject = headers.find(h => h.name === 'Subject')?.value || '(без тема)';
       emails.push(`От: ${from}\nТема: ${subject}`);
     }
-
     const aiRes = await ai.chat.completions.create({
-      model: 'google/gemini-flash-1.5',
-      messages: [{
-        role: 'user',
-        content: `Резюмирай тези ${emails.length} имейла кратко на български. Групирай по важност. Маркирай тези изискващи действие с ⚡.\n\n${emails.join('\n---\n')}`
-      }],
+      model: MODEL_FAST,
+      messages: [{ role: 'user', content: `Резюмирай тези ${emails.length} имейла кратко на български. Групирай по важност. Маркирай тези изискващи действие с ⚡.\n\n${emails.join('\n---\n')}` }],
       max_tokens: 600,
     });
     return `📧 *Имейли — последните 24 часа (${emails.length}):*\n\n${aiRes.choices[0].message.content}`;
@@ -186,7 +231,7 @@ async function getGmailSummary() {
   }
 }
 
-// ── Времето от OpenWeatherMap ──
+// ── Времето ──
 async function getWeather() {
   const key = process.env.WEATHER_API_KEY;
   if (!key) return null;
@@ -208,43 +253,70 @@ async function getWeather() {
   }
 }
 
-// ── Сутрешен бюлетин ──
+// ── Сутрешен бюлетин (8:00) ──
 async function sendMorningBriefing() {
-  if (!OWNER_ID) return;
+  // ПОПРАВКА 4: Логване — винаги се вижда дали cron изобщо се изпълнява
+  console.log(`[${new Date().toISOString()}] ⏰ sendMorningBriefing стартира, OWNER_ID="${OWNER_ID}"`);
+
+  if (!OWNER_ID) {
+    console.error('❌ OWNER_TELEGRAM_ID не е зададен в .env!');
+    return;
+  }
+
   try {
-    const weather = await getWeather();
-    const newsResponse = await ai.chat.completions.create({
-      model: 'perplexity/sonar',
-      messages: [
-        {
-          role: 'user',
-          content: `Дай топ 3 новини от България днес (${new Date().toLocaleDateString('bg-BG')}) и един мотивиращ цитат. Само новини и цитат — без времето. Кратко, с емоджи, на български.`
-        }
-      ],
-      max_tokens: 500,
-    });
-    const news = newsResponse.choices[0].message.content;
-    const gmail = await getGmailSummary();
-    const weatherSection = weather
-      ? `🌤 *Времето в Стара Загора:*\n${weather}\n\n`
-      : '';
-    const gmailSection = gmail ? `\n\n${gmail}` : '';
-    const msg = `☀️ *Добро утро, Ясен!*\n\n${weatherSection}${news}${gmailSection}`;
+    // ПОПРАВКА 5: Promise.allSettled — ако едно се провали, другите пак се изпращат
+    const [weatherResult, gmailResult] = await Promise.allSettled([
+      getWeather(),
+      getGmailSummary()
+    ]);
+
+    let newsText = '';
+    try {
+      const newsResponse = await ai.chat.completions.create({
+        model: MODEL_SEARCH,
+        messages: [{ role: 'user', content: `Дай топ 3 новини от България днес (${new Date().toLocaleDateString('bg-BG')}) и един мотивиращ цитат. Само новини и цитат — без времето. Кратко, с емоджи, на български.` }],
+        max_tokens: 500,
+      });
+      newsText = newsResponse.choices[0].message.content;
+    } catch (e) {
+      console.error('News fetch error:', e.message);
+      newsText = '📰 Новините не успяха да се заредят днес.';
+    }
+
+    const weather = weatherResult.status === 'fulfilled' ? weatherResult.value : null;
+    const gmail   = gmailResult.status   === 'fulfilled' ? gmailResult.value   : null;
+
+    const weatherSection = weather ? `🌤 *Времето в Стара Загора:*\n${weather}\n\n` : '';
+    const gmailSection   = gmail   ? `\n\n${gmail}` : '';
+
+    const msg = `☀️ *Добро утро, Ясен!*\n\n${weatherSection}${newsText}${gmailSection}`;
     await bot.telegram.sendMessage(OWNER_ID, msg, { parse_mode: 'Markdown' });
+    console.log('✅ Сутрешният бюлетин е изпратен успешно.');
   } catch (e) {
-    console.error('Morning briefing error:', e.message);
+    console.error('Morning briefing FATAL error:', e.message);
+    // ПОПРАВКА 6: При фатална грешка — Ясен получава съобщение в Telegram
+    await notifyOwnerError('Сутрешен бюлетин', e.message);
   }
 }
 
-// Всеки ден в 8:00 Sofia time
-cron.schedule('0 8 * * *', sendMorningBriefing, { timezone: 'Europe/Sofia' });
-
-// ── Вечерна MOTAMO статистика в 21:00 ──
+// ── Вечерна MOTAMO статистика (21:00) ──
 async function sendEveningStats() {
-  if (!OWNER_ID) return;
+  console.log(`[${new Date().toISOString()}] ⏰ sendEveningStats стартира, OWNER_ID="${OWNER_ID}"`);
+
+  if (!OWNER_ID) {
+    console.error('❌ OWNER_TELEGRAM_ID не е зададен в .env!');
+    return;
+  }
+
   const motamoUrl = process.env.MOTAMO_URL;
   const motamoKey = process.env.MOTAMO_KEY;
-  if (!motamoUrl || !motamoKey) return;
+
+  if (!motamoUrl || !motamoKey) {
+    // ПОПРАВКА 7: Вместо тихо да спре — Ясен получава известие
+    await notifyOwnerError('Вечерна статистика', 'MOTAMO_URL или MOTAMO_KEY не са зададени в .env');
+    return;
+  }
+
   try {
     const res = await fetch(`${motamoUrl}/api/stats?key=${motamoKey}`);
     const stats = await res.json();
@@ -252,27 +324,35 @@ async function sendEveningStats() {
     const lines = [`📊 *MOTAMO — Статистика днес*\n`, `Общо запитвания: *${total}*`];
     if (stats.categories && Object.keys(stats.categories).length) {
       lines.push('\n*По категории:*');
-      for (const [cat, cnt] of Object.entries(stats.categories).sort((a,b) => b[1]-a[1])) {
+      for (const [cat, cnt] of Object.entries(stats.categories).sort((a, b) => b[1] - a[1])) {
         lines.push(`• ${cat}: ${cnt}`);
       }
     }
     if (stats.products && Object.keys(stats.products).length) {
       lines.push('\n*Топ продукти:*');
-      Object.entries(stats.products).sort((a,b) => b[1]-a[1]).slice(0,5).forEach(([p,c]) => {
+      Object.entries(stats.products).sort((a, b) => b[1] - a[1]).slice(0, 5).forEach(([p, c]) => {
         lines.push(`• ${p}: ${c}`);
       });
     }
     await bot.telegram.sendMessage(OWNER_ID, lines.join('\n'), { parse_mode: 'Markdown' });
+    console.log('✅ Вечерната статистика е изпратена успешно.');
   } catch (e) {
     console.error('Evening stats error:', e.message);
+    await notifyOwnerError('Вечерна статистика', e.message);
   }
 }
 
-// Всеки ден в 21:00 Sofia time
-cron.schedule('0 21 * * *', sendEveningStats, { timezone: 'Europe/Sofia' });
+// ── Cron задачи ──
+cron.schedule('0 8 * * *', sendMorningBriefing, { timezone: 'Europe/Sofia' });
+cron.schedule('0 21 * * *', sendEveningStats,   { timezone: 'Europe/Sofia' });
 
+// ── Стартиране ──
 bot.launch();
 console.log('✅ Capy Telegram Bot стартиран!');
+console.log(`   OWNER_ID: ${OWNER_ID || '❌ НЕ Е ЗАДАДЕН — репортите НЯМА да се изпращат!'}`);
+console.log(`   Gmail:    ${process.env.GMAIL_CLIENT_ID ? '✅' : '❌ не е конфигуриран'}`);
+console.log(`   Weather:  ${process.env.WEATHER_API_KEY ? '✅' : '❌ не е конфигуриран'}`);
+console.log(`   MOTAMO:   ${process.env.MOTAMO_URL ? '✅' : '❌ не е конфигуриран'}`);
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
